@@ -23,6 +23,9 @@ dist-ssr
 *.sln
 *.sw?
 
+.claude
+Claude/
+
 # Server
 server/node_modules
 server/dist
