@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* VetMe Design System - Professional Fintech Aesthetic */
+/* CityPulse Design System */
 
 @layer base {
   :root {
@@ -125,6 +125,7 @@
   body {
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    scroll-behavior: smooth;
   }
 }
 

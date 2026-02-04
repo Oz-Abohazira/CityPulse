@@ -4,8 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
-import RequesterDashboard from "./pages/RequesterDashboard";
-import CandidateFlow from "./pages/CandidateFlow";
+import PulseDashboard from "./pages/PulseDashboard";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -17,10 +16,15 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
+          {/* Main Routes */}
           <Route path="/" element={<Index />} />
-          <Route path="/dashboard" element={<RequesterDashboard />} />
-          <Route path="/verify" element={<CandidateFlow />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+          <Route path="/pulse" element={<PulseDashboard />} />
+
+          {/* Future Routes */}
+          {/* <Route path="/compare" element={<ComparePage />} /> */}
+          {/* <Route path="/saved" element={<SavedLocationsPage />} /> */}
+
+          {/* Catch-all */}
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

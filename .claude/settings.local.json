@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx prisma:*)",
+      "Bash(npx prisma db push:*)",
+      "Bash(npx tsx:*)",
+      "Bash(copy:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(node -e:*)",
+      "Bash(node:*)",
+      "Bash(tasklist:*)",
+      "Bash(npx vite:*)",
+      "Bash(curl:*)",
+      "WebFetch(domain:crime-data-explorer.fr.cloud.gov)",
+      "WebFetch(domain:cde.ucr.cjis.gov)",
+      "WebFetch(domain:crime-data-api.fr.cloud.gov)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.opendatanetwork.com)"
+    ]
+  }
+}

@@ -1,0 +1,238 @@
+// =============================================================================
+// CITYPULSE - DATABASE SCHEMA (Georgia-Focused with Free Data Sources)
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Georgia Geographic Data
+// -----------------------------------------------------------------------------
+
+model GeorgiaCounty {
+  id          String   @id @default(cuid())
+  fips        String   @unique  // Federal FIPS code (13001, 13003, etc.)
+  name        String            // "Fulton", "DeKalb", etc.
+  population  Int?
+
+  // FBI Crime Data (per 100,000 population)
+  violentCrimeRate    Float?
+  propertyCrimeRate   Float?
+  murderRate          Float?
+  robberyRate         Float?
+  assaultRate         Float?
+  burglaryRate        Float?
+  larcenyRate         Float?
+  vehicleTheftRate    Float?
+
+  // Calculated safety score (0-100)
+  safetyScore         Int?
+  safetyGrade         String?   // A, B, C, D, F
+
+  // Data freshness
+  crimeDataYear       Int?
+  updatedAt           DateTime  @updatedAt
+
+  // Relations
+  cities              GeorgiaCity[]
+  zipCodes            GeorgiaZipCode[]
+}
+
+model GeorgiaCity {
+  id          String   @id @default(cuid())
+  name        String
+  countyId    String
+  population  Int?
+  lat         Float
+  lng         Float
+
+  // Relations
+  county      GeorgiaCounty @relation(fields: [countyId], references: [id])
+  zipCodes    GeorgiaZipCode[]
+
+  @@unique([name, countyId])
+  @@index([lat, lng])
+}
+
+model GeorgiaZipCode {
+  id          String   @id @default(cuid())
+  zipCode     String   @unique
+  countyId    String
+  cityId      String?
+  lat         Float    // Centroid latitude
+  lng         Float    // Centroid longitude
+  population  Int?
+
+  // Pre-calculated scores for this ZIP
+  walkabilityScore    Int?
+  transitScore        Int?
+  bikeScore           Int?
+  amenitiesScore      Int?
+
+  // Relations
+  county      GeorgiaCounty   @relation(fields: [countyId], references: [id])
+  city        GeorgiaCity?    @relation(fields: [cityId], references: [id])
+  amenities   Amenity[]
+
+  @@index([lat, lng])
+}
+
+// -----------------------------------------------------------------------------
+// OpenStreetMap Amenities Cache
+// -----------------------------------------------------------------------------
+
+model Amenity {
+  id          String   @id @default(cuid())
+  osmId       String   @unique  // OpenStreetMap node/way ID
+  name        String?
+  category    String            // restaurant, grocery, pharmacy, etc.
+  subcategory String?           // fast_food, supermarket, etc.
+  lat         Float
+  lng         Float
+
+  // Optional details from OSM tags
+  address     String?
+  phone       String?
+  website     String?
+  openingHours String?
+
+  // For ZIP code association
+  zipCodeId   String?
+  zipCode     GeorgiaZipCode? @relation(fields: [zipCodeId], references: [id])
+
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([lat, lng])
+  @@index([zipCodeId, category])
+}
+
+// -----------------------------------------------------------------------------
+// User Management
+// -----------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  firstName     String?
+  lastName      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  savedLocations SavedLocation[]
+  searchHistory  SearchHistory[]
+  comparisons    Comparison[]
+}
+
+// -----------------------------------------------------------------------------
+// Saved Locations
+// -----------------------------------------------------------------------------
+
+model SavedLocation {
+  id          String   @id @default(cuid())
+  userId      String
+  address     String
+  city        String
+  county      String
+  state       String   @default("GA")
+  zipCode     String
+  lat         Float
+  lng         Float
+  nickname    String?
+  notes       String?
+  savedAt     DateTime @default(now())
+  lastViewed  DateTime?
+
+  // Cached pulse data (JSON stored as string)
+  pulseData   String?
+  pulseDate   DateTime?
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, address])
+}
+
+// -----------------------------------------------------------------------------
+// Search History
+// -----------------------------------------------------------------------------
+
+model SearchHistory {
+  id          String   @id @default(cuid())
+  userId      String
+  query       String
+  address     String?
+  city        String?
+  county      String?
+  zipCode     String?
+  lat         Float?
+  lng         Float?
+  searchedAt  DateTime @default(now())
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, searchedAt])
+}
+
+// -----------------------------------------------------------------------------
+// Location Comparisons
+// -----------------------------------------------------------------------------
+
+model Comparison {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  locations   ComparisonLocation[]
+}
+
+model ComparisonLocation {
+  id            String   @id @default(cuid())
+  comparisonId  String
+  address       String
+  city          String
+  county        String
+  zipCode       String
+  lat           Float
+  lng           Float
+  orderIndex    Int
+
+  // Cached pulse data
+  pulseData     String?
+
+  // Relations
+  comparison    Comparison @relation(fields: [comparisonId], references: [id], onDelete: Cascade)
+
+  @@index([comparisonId])
+}
+
+// -----------------------------------------------------------------------------
+// Pulse Cache (computed results)
+// -----------------------------------------------------------------------------
+
+model PulseCache {
+  id          String   @id @default(cuid())
+  zipCode     String   @unique
+  lat         Float
+  lng         Float
+
+  // Full computed pulse data as JSON
+  pulseData   String
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([lat, lng])
+}
