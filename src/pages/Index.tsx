@@ -4,7 +4,16 @@ import { MapPin, Search, Shield, Footprints, ShoppingCart, Bus, ArrowRight, Spar
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { autocomplete, type AutocompletePrediction } from "@/api/client";
+import { INTENT_OPTIONS, DEFAULT_INTENT } from "@/constants/intents";
+import type { SearchIntent } from "@/types";
 import { cn } from "@/lib/utils";
 
 const Index = () => {
@@ -13,6 +22,7 @@ const Index = () => {
   const [predictions, setPredictions] = useState<AutocompletePrediction[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showPredictions, setShowPredictions] = useState(false);
+  const [searchIntent, setSearchIntent] = useState<SearchIntent>(DEFAULT_INTENT);
   const searchRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -59,7 +69,8 @@ const Index = () => {
     setShowPredictions(false);
     setSearchQuery(prediction.description);
     // Navigate with coordinates since we have them from Nominatim
-    navigate(`/pulse?lat=${prediction.lat}&lng=${prediction.lng}&address=${encodeURIComponent(prediction.description)}`);
+    const intentParam = searchIntent !== 'curious' ? `&intent=${searchIntent}` : '';
+    navigate(`/pulse?lat=${prediction.lat}&lng=${prediction.lng}&address=${encodeURIComponent(prediction.description)}${intentParam}`);
   };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -68,7 +79,8 @@ const Index = () => {
       handlePredictionClick(predictions[0]);
     } else if (searchQuery.length >= 3) {
       // Direct address search
-      navigate(`/pulse?address=${encodeURIComponent(searchQuery)}`);
+      const intentParam = searchIntent !== 'curious' ? `&intent=${searchIntent}` : '';
+      navigate(`/pulse?address=${encodeURIComponent(searchQuery)}${intentParam}`);
     }
   };
 
@@ -151,6 +163,30 @@ const Index = () => {
                 </Button>
               </div>
             </form>
+
+            {/* Intent Selector */}
+            <div className="mt-4 flex items-center justify-center gap-3">
+              <span className="text-white/60 text-sm">I'm</span>
+              <Select value={searchIntent} onValueChange={(v) => setSearchIntent(v as SearchIntent)}>
+                <SelectTrigger className="w-[280px] bg-white/10 border-white/20 text-white hover:bg-white/15 focus:ring-emerald-400/50">
+                  <SelectValue placeholder="Select your purpose" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-white/10">
+                  {INTENT_OPTIONS.map((option) => (
+                    <SelectItem
+                      key={option.value}
+                      value={option.value}
+                      className="text-white hover:bg-white/10 focus:bg-white/10 focus:text-white cursor-pointer"
+                    >
+                      <div className="flex flex-col py-1">
+                        <span className="font-medium">{option.label}</span>
+                        <span className="text-xs text-white/50">{option.description}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
             {/* Autocomplete Predictions */}
             {showPredictions && predictions.length > 0 && (

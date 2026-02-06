@@ -305,6 +305,18 @@ export interface VibeScore {
 }
 
 // =============================================================================
+// Search Intent (for personalized AI insights)
+// =============================================================================
+
+export type SearchIntent =
+  | 'moving_family'      // Family considering moving (schools, safety, parks)
+  | 'moving_single'      // Single/professional moving (nightlife, transit, dining)
+  | 'visiting'           // Tourist/visitor (restaurants, entertainment, hotels)
+  | 'driving_through'    // Just passing through (gas, food, rest stops)
+  | 'investment'         // Investment property (safety trends, schools, growth)
+  | 'curious';           // Just curious (balanced overview)
+
+// =============================================================================
 // Location Pulse (Complete Analysis)
 // =============================================================================
 

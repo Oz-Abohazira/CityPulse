@@ -11,7 +11,9 @@ import type {
   SafetyScore,
   MobilityScores,
   AmenitiesScore,
+  SearchIntent,
 } from '../types.js';
+import { generateAIInsights, type LocationContext } from './groq.js';
 
 // -----------------------------------------------------------------------------
 // Default Weights
@@ -114,74 +116,174 @@ const LABEL_SUMMARIES: Record<VibeLabel, string> = {
 };
 
 // -----------------------------------------------------------------------------
-// Pros/Cons Generation
+// Pros/Cons Generation (Data-Driven with Real POI Details)
 // -----------------------------------------------------------------------------
 
-function generatePros(breakdown: VibeScore['breakdown'], amenities: AmenitiesScore): string[] {
+function generatePros(breakdown: VibeScore['breakdown'], amenities: AmenitiesScore, pois?: any[]): string[] {
   const pros: string[] = [];
 
-  if (breakdown.safety >= 80) pros.push("Excellent safety record");
-  else if (breakdown.safety >= 65) pros.push("Above-average safety");
-  else if (breakdown.safety >= 50) pros.push("Safety is at a moderate level");
+  // Safety - always lead with this if it's good
+  if (breakdown.safety >= 80) pros.push("Excellent safety record with very low crime rates");
+  else if (breakdown.safety >= 65) pros.push("Above-average safety compared to metro area");
 
-  if (breakdown.walkability >= 85) pros.push("Walker's paradise - no car needed");
-  else if (breakdown.walkability >= 70) pros.push("Very walkable for daily errands");
-  else if (breakdown.walkability >= 45) pros.push("Some destinations are reachable on foot");
+  const highlights = amenities.highlights || {};
+  const poisByCategory = (pois || []).reduce((acc: Record<string, any[]>, poi) => {
+    if (!acc[poi.category]) acc[poi.category] = [];
+    acc[poi.category].push(poi);
+    return acc;
+  }, {});
 
-  if (breakdown.transit >= 80) pros.push("World-class public transit");
-  else if (breakdown.transit >= 65) pros.push("Good public transit options");
-  else if (breakdown.transit >= 30) pros.push("Public transit is available nearby");
+  // Grocery - critical for livability (show specific stores)
+  if (highlights.groceryStores >= 3) {
+    const stores = (poisByCategory.grocery || []).slice(0, 3).map(p => p.name).filter(n => n);
+    const storeList = stores.length > 0 ? ` (${stores.join(', ')})` : '';
+    pros.push(`${highlights.groceryStores} grocery stores nearby${storeList}`);
+  } else if (highlights.groceryStores >= 1) {
+    const nearestGrocery = amenities.nearestByCategory?.grocery;
+    if (nearestGrocery) {
+      const dist = nearestGrocery.distance ? ` ${nearestGrocery.distance}mi away` : '';
+      pros.push(`Grocery access: ${nearestGrocery.name}${dist}`);
+    }
+  }
 
-  if (breakdown.amenities >= 80) pros.push("Abundant shops, restaurants, and services");
-  else if (breakdown.amenities >= 65) pros.push("Good variety of local amenities");
-  else if (breakdown.amenities >= 35) pros.push("Basic amenities are accessible in the area");
+  // Dining - show count and variety
+  if (highlights.restaurants >= 20) {
+    pros.push(`Exceptional dining scene with ${highlights.restaurants}+ restaurants`);
+  } else if (highlights.restaurants >= 10) {
+    pros.push(`Great restaurant variety (${highlights.restaurants} nearby options)`);
+  } else if (highlights.restaurants >= 5) {
+    pros.push(`${highlights.restaurants} restaurants within walking distance`);
+  }
 
-  // Check essentials (grocery + healthcare)
-  const essentialsScore = ((amenities.categories?.grocery || 0) + (amenities.categories?.healthcare || 0)) / 2;
-  if (essentialsScore >= 80) pros.push("Essential services within walking distance");
-  else if (essentialsScore >= 40) pros.push("Key essentials are reachable");
+  // Gyms/fitness (show specific names)
+  const gyms = poisByCategory.gym || [];
+  if (gyms.length >= 3) {
+    const gymNames = gyms.slice(0, 2).map(p => p.name).filter(n => n).join(', ');
+    pros.push(`${gyms.length} fitness centers including ${gymNames}`);
+  } else if (gyms.length >= 1) {
+    pros.push(`Fitness access: ${gyms[0].name} nearby`);
+  }
 
-  // Check lifestyle (dining + entertainment)
-  const lifestyleScore = ((amenities.categories?.dining || 0) + (amenities.categories?.entertainment || 0)) / 2;
-  if (lifestyleScore >= 80) pros.push("Vibrant dining and entertainment scene");
-  else if (lifestyleScore >= 30) pros.push("Some dining and entertainment options nearby");
+  // Healthcare & Pharmacy combined
+  const pharmacies = poisByCategory.pharmacy || [];
+  const healthcare = poisByCategory.healthcare || [];
+  const totalHealth = pharmacies.length + healthcare.length;
+  if (totalHealth >= 5) {
+    const names = [...pharmacies, ...healthcare].slice(0, 2).map(p => p.name).filter(n => n);
+    pros.push(`${totalHealth} healthcare facilities (${names.join(', ')})`);
+  } else if (pharmacies.length >= 1) {
+    pros.push(`Pharmacy nearby: ${pharmacies[0].name}`);
+  }
 
-  // Guarantee at least 2 highlights
-  if (pros.length < 2) pros.push("Residential area with community services");
-  if (pros.length < 2) pros.push("Connected to surrounding neighborhoods");
+  // Walkability
+  if (breakdown.walkability >= 85) pros.push("Walker's paradise - daily errands do not require a car");
+  else if (breakdown.walkability >= 70) pros.push("Very walkable - most errands accomplished on foot");
 
-  return pros.slice(0, 4);
+  // Transit
+  if (breakdown.transit >= 80) pros.push("Excellent public transit with frequent service");
+  else if (breakdown.transit >= 60) pros.push("Good public transit connections");
+
+  // Parks
+  const parks = poisByCategory.park || [];
+  if (parks.length >= 3) {
+    const parkNames = parks.slice(0, 2).map(p => p.name).filter(n => n && n !== 'Park');
+    const namesList = parkNames.length > 0 ? ` (${parkNames.join(', ')})` : '';
+    pros.push(`${parks.length} parks and green spaces${namesList}`);
+  }
+
+  // Banking
+  const banks = poisByCategory.bank || [];
+  if (banks.length >= 5) {
+    pros.push(`Convenient banking with ${banks.length} locations nearby`);
+  }
+
+  // Cafes/coffee culture
+  const cafes = poisByCategory.cafe || [];
+  if (cafes.length >= 5) {
+    pros.push(`Vibrant coffee culture with ${cafes.length} cafes`);
+  }
+
+  // Bars/nightlife
+  const bars = poisByCategory.bar || [];
+  if (bars.length >= 5 && breakdown.safety >= 60) {
+    pros.push(`Active nightlife scene with ${bars.length} bars and venues`);
+  }
+
+  // Guarantee at least 3 highlights
+  if (pros.length < 3 && breakdown.safety >= 50) pros.push("Moderate safety with standard precautions recommended");
+  if (pros.length < 3) pros.push("Established residential area");
+  if (pros.length < 3) pros.push("Connected to surrounding neighborhoods");
+
+  return pros.slice(0, 5);
 }
 
-function generateCons(breakdown: VibeScore['breakdown'], amenities: AmenitiesScore): string[] {
+function generateCons(breakdown: VibeScore['breakdown'], amenities: AmenitiesScore, pois?: any[]): string[] {
   const cons: string[] = [];
 
-  if (breakdown.safety < 50) cons.push("Higher than average crime rates");
-  else if (breakdown.safety < 65) cons.push("Safety could be a concern");
-  else if (breakdown.safety < 80) cons.push("Verify safety for specific blocks in the area");
+  const highlights = amenities.highlights || {};
+  const poisByCategory = (pois || []).reduce((acc: Record<string, any[]>, poi) => {
+    if (!acc[poi.category]) acc[poi.category] = [];
+    acc[poi.category].push(poi);
+    return acc;
+  }, {});
 
-  if (breakdown.walkability < 40) cons.push("Car required for most errands");
-  else if (breakdown.walkability < 55) cons.push("Limited walkability");
-  else if (breakdown.walkability < 75) cons.push("A car is useful for some errands");
+  // Safety concerns with specificity
+  if (breakdown.safety < 50) cons.push("Higher than average crime rates - extra caution advised");
+  else if (breakdown.safety < 65) cons.push("Safety scores below metro average");
+  else if (breakdown.safety < 80) cons.push("Verify safety for specific streets before committing");
 
-  if (breakdown.transit < 30) cons.push("Very limited public transit");
+  // Food desert is critical
+  if (amenities.isFoodDesert) {
+    const nearestGrocery = amenities.nearestByCategory?.grocery;
+    if (nearestGrocery && nearestGrocery.distance) {
+      cons.push(`Food desert - nearest grocery (${nearestGrocery.name}) is ${nearestGrocery.distance}mi away`);
+    } else {
+      cons.push("Food desert - no grocery stores within 1 mile");
+    }
+  }
+
+  // Walkability
+  if (breakdown.walkability < 40) cons.push("Car required for most errands - very car-dependent");
+  else if (breakdown.walkability < 55) cons.push("Limited walkability - car needed for daily activities");
+  else if (breakdown.walkability < 75) cons.push("A car is useful for many errands");
+
+  // Transit
+  if (breakdown.transit < 30) cons.push("Very limited public transit - car ownership essential");
   else if (breakdown.transit < 50) cons.push("Public transit options are sparse");
-  else if (breakdown.transit < 70) cons.push("Transit frequency may be limited");
+  else if (breakdown.transit < 70) cons.push("Transit frequency may require schedule planning");
 
-  if (amenities.isFoodDesert) cons.push("Limited grocery store access (food desert)");
-  else if (breakdown.amenities < 40) cons.push("Few nearby amenities");
-  else if (breakdown.amenities < 65) cons.push("Fewer options than nearby urban areas");
+  // Specific amenity gaps
+  const gyms = poisByCategory.gym || [];
+  const pharmacies = poisByCategory.pharmacy || [];
+  const healthcare = poisByCategory.healthcare || [];
 
-  // Check essentials (grocery + healthcare)
-  const essentialsScore = ((amenities.categories?.grocery || 0) + (amenities.categories?.healthcare || 0)) / 2;
-  if (essentialsScore < 50) cons.push("Essential services may require driving");
-  else if (essentialsScore < 70) cons.push("Some essential services are a short drive away");
+  if (gyms.length === 0 && breakdown.amenities < 70) {
+    cons.push("No fitness centers within immediate vicinity");
+  }
+
+  if (pharmacies.length === 0 && highlights.groceryStores < 2) {
+    const nearest = amenities.nearestByCategory?.pharmacy;
+    if (nearest && nearest.distance && nearest.distance > 1) {
+      cons.push(`Limited pharmacy access - nearest is ${nearest.distance}mi away`);
+    }
+  }
+
+  if (healthcare.length === 0 && pharmacies.length === 0) {
+    cons.push("Healthcare facilities require travel - plan accordingly");
+  }
+
+  // General amenity scarcity
+  if (breakdown.amenities < 40 && !amenities.isFoodDesert) {
+    cons.push(`Limited amenities overall - only ${highlights.totalPOIs || 0} services nearby`);
+  } else if (breakdown.amenities < 65 && highlights.restaurants < 5) {
+    cons.push("Dining options are limited - fewer restaurants than urban areas");
+  }
 
   // Guarantee at least 2 considerations
-  if (cons.length < 2) cons.push("Consider visiting the area at different times of day");
+  if (cons.length < 2) cons.push("Visit the area at different times to assess noise and activity levels");
   if (cons.length < 2) cons.push("Compare with nearby neighborhoods for best value");
 
-  return cons.slice(0, 4);
+  return cons.slice(0, 5);
 }
 
 // -----------------------------------------------------------------------------
@@ -231,12 +333,15 @@ function calculateConfidence(
 // Main Vibe Calculation Function
 // -----------------------------------------------------------------------------
 
-export function calculateVibeScore(
+export async function calculateVibeScore(
   safety: SafetyScore,
   mobility: MobilityScores,
   amenities: AmenitiesScore,
-  customWeights?: Partial<VibeFactors>
-): VibeScore {
+  customWeights?: Partial<VibeFactors>,
+  pois?: any[],
+  intent?: SearchIntent,
+  location?: LocationContext
+): Promise<VibeScore> {
   // Merge custom weights with defaults
   const weights: VibeFactors = {
     ...DEFAULT_WEIGHTS,
@@ -285,9 +390,30 @@ export function calculateVibeScore(
   const confidence = calculateConfidence(safety, mobility, amenities);
 
   // Generate summary, pros, and cons
-  const summary = LABEL_SUMMARIES[label];
-  const pros = generatePros(breakdown, amenities);
-  const cons = generateCons(breakdown, amenities);
+  let summary = LABEL_SUMMARIES[label];
+  let pros = generatePros(breakdown, amenities, pois);
+  let cons = generateCons(breakdown, amenities, pois);
+
+  // If intent is provided (and not 'curious'), try AI-powered insights
+  if (intent && intent !== 'curious' && location) {
+    const aiInsights = await generateAIInsights(
+      intent,
+      safety,
+      mobility,
+      amenities,
+      pois || [],
+      location
+    );
+
+    if (aiInsights) {
+      pros = aiInsights.pros;
+      cons = aiInsights.cons;
+      if (aiInsights.summary) {
+        summary = aiInsights.summary;
+      }
+    }
+    // If AI fails, we already have rule-based pros/cons as fallback
+  }
 
   return {
     overall,

@@ -3,7 +3,7 @@
 // Georgia-Focused Location Intelligence using FREE Data Sources
 // =============================================================================
 
-import type { ApiResponse, ApiError, Location, LocationPulse, SavedLocation, VibeFactors } from '@/types';
+import type { ApiResponse, ApiError, Location, LocationPulse, SavedLocation, VibeFactors, SearchIntent } from '@/types';
 
 // -----------------------------------------------------------------------------
 // Configuration
@@ -274,20 +274,23 @@ export interface PulseRequest {
   lng?: number;
   weightPreset?: WeightPresetName;
   weights?: Partial<VibeFactors>;
+  intent?: SearchIntent;
 }
 
 /**
  * Analyze a location by address string (Georgia only)
+ * @param intent - Optional search intent for personalized AI insights
  */
-export async function analyzeByAddress(address: string, weightPreset?: WeightPresetName) {
-  return post<LocationPulse>('/pulse/analyze-address', { address, weightPreset });
+export async function analyzeByAddress(address: string, weightPreset?: WeightPresetName, intent?: SearchIntent) {
+  return post<LocationPulse>('/pulse/analyze-address', { address, weightPreset, intent });
 }
 
 /**
  * Analyze a location by coordinates (Georgia only)
+ * @param intent - Optional search intent for personalized AI insights
  */
-export async function analyzeByCoordinates(lat: number, lng: number, weightPreset?: WeightPresetName) {
-  return post<LocationPulse>('/pulse/analyze', { lat, lng, weightPreset });
+export async function analyzeByCoordinates(lat: number, lng: number, weightPreset?: WeightPresetName, intent?: SearchIntent) {
+  return post<LocationPulse>('/pulse/analyze', { lat, lng, weightPreset, intent });
 }
 
 /**

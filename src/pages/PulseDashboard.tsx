@@ -31,7 +31,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { analyzeByAddress, analyzeByCoordinates, type WeightPresetName } from "@/api/client";
-import type { LocationPulse, SafetyScore, VibeLabel } from "@/types";
+import type { LocationPulse, SafetyScore, VibeLabel, SearchIntent } from "@/types";
 import { cn } from "@/lib/utils";
 
 // -----------------------------------------------------------------------------
@@ -206,6 +206,7 @@ export default function PulseDashboard() {
   const lat = searchParams.get("lat");
   const lng = searchParams.get("lng");
   const address = searchParams.get("address");
+  const intent = searchParams.get("intent") as SearchIntent | null;
 
   useEffect(() => {
     async function fetchPulse() {
@@ -224,10 +225,11 @@ export default function PulseDashboard() {
         response = await analyzeByCoordinates(
           parseFloat(lat),
           parseFloat(lng),
-          weightPreset
+          weightPreset,
+          intent || undefined
         );
       } else if (address) {
-        response = await analyzeByAddress(address, weightPreset);
+        response = await analyzeByAddress(address, weightPreset, intent || undefined);
       }
 
       if (response?.success && response.data) {
@@ -240,7 +242,7 @@ export default function PulseDashboard() {
     }
 
     fetchPulse();
-  }, [lat, lng, address, weightPreset]);
+  }, [lat, lng, address, weightPreset, intent]);
 
   if (isLoading) {
     return (
@@ -328,9 +330,6 @@ export default function PulseDashboard() {
               <div className="flex items-center gap-3 flex-wrap">
                 <Badge className={cn("text-white", getVibeBgColor(vibeScore.label))}>
                   {formatVibeLabel(vibeScore.label)}
-                </Badge>
-                <Badge className="bg-white/10 text-white/70">
-                  Georgia Only
                 </Badge>
                 <span className="text-white/50 text-sm">
                   Analyzed {new Date(pulse.analyzedAt).toLocaleDateString()}

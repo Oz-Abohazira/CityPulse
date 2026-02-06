@@ -10,7 +10,10 @@ import { ApiError } from '../middleware/errorHandler.js';
 import { optionalAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { calculateSafetyScore, GEORGIA_COUNTIES, fetchCountyCrimeData } from '../services/fbi-crime.js';
 import { fetchAmenitiesInRadius, fetchTransitStops, calculateAmenitiesScore } from '../services/osm-amenities.js';
-import { calculateMobilityScoresFromPOIs } from '../services/walkability.js';
+import { fetchFoursquarePOIs } from '../services/foursquare.js';
+import { calculateMobilityScoresFromPOIs, calculateBikeScore } from '../services/walkability.js';
+import { getTransitMobilityScores } from '../services/transit.js';
+import { findTransitStopsNearby } from '../data/georgia-transit-data.js';
 import { geocode, reverseGeocode, searchPlaces } from '../services/nominatim.js';
 import { calculateVibeScore, WEIGHT_PRESETS } from '../services/vibe.js';
 import type { LocationPulse, SafetyScore, MobilityScores, AmenitiesScore, VibeFactors, Location } from '../../../src/types/index.js';
@@ -22,6 +25,8 @@ const prisma = new PrismaClient();
 // Validation Schemas
 // -----------------------------------------------------------------------------
 
+const intentEnum = z.enum(['moving_family', 'moving_single', 'visiting', 'driving_through', 'investment', 'curious']);
+
 const pulseByCoordinatesSchema = z.object({
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),
@@ -32,6 +37,7 @@ const pulseByCoordinatesSchema = z.object({
     amenitiesWeight: z.number().min(0).max(1).optional(),
   }).optional(),
   weightPreset: z.enum(['balanced', 'safety_first', 'urban_explorer', 'commuter', 'foodie']).optional(),
+  intent: intentEnum.optional(),
 });
 
 const pulseByAddressSchema = z.object({
@@ -43,6 +49,7 @@ const pulseByAddressSchema = z.object({
     amenitiesWeight: z.number().min(0).max(1).optional(),
   }).optional(),
   weightPreset: z.enum(['balanced', 'safety_first', 'urban_explorer', 'commuter', 'foodie']).optional(),
+  intent: intentEnum.optional(),
 });
 
 // -----------------------------------------------------------------------------
@@ -252,7 +259,7 @@ router.post('/analyze', optionalAuth, async (req: AuthenticatedRequest, res: Res
       });
     }
 
-    const { lat, lng, weights, weightPreset } = validation.data;
+    const { lat, lng, weights, weightPreset, intent } = validation.data;
 
     // Determine weights to use
     const effectiveWeights: Partial<VibeFactors> = weightPreset
@@ -291,25 +298,66 @@ router.post('/analyze', optionalAuth, async (req: AuthenticatedRequest, res: Res
     console.log('Fetching fresh data for coordinates:', { lat, lng, county: countyName });
     const startTime = Date.now();
 
-    const [safetyScore, amenities, transitStops] = await Promise.all([
+    // Run safety, transit, and Foursquare amenities in parallel.
+    // Foursquare returns null when not configured or rate-limited; we fall
+    // back to Overpass only in that case.
+    const [safetyScore, foursquarePOIs, transitStops] = await Promise.all([
       getSafetyScoreForLocation(countyName),
-      fetchAmenitiesInRadius(lat, lng, 8047), // 5 miles
+      fetchFoursquarePOIs(lat, lng, 8047),   // 5 miles
       fetchTransitStops(lat, lng, 1609),
     ]);
+
+    let amenities: any[];
+    let amenitySource: string;
+    if (foursquarePOIs && foursquarePOIs.length > 0) {
+      amenities     = foursquarePOIs;
+      amenitySource = 'Foursquare';
+    } else if (foursquarePOIs === null) {
+      // Not configured or rate-limited – try Overpass
+      amenities     = await fetchAmenitiesInRadius(lat, lng, 8047);
+      amenitySource = 'OpenStreetMap';
+    } else {
+      // Foursquare was called but returned 0 results – trust that, skip Overpass
+      amenities     = [];
+      amenitySource = 'Foursquare';
+    }
 
     // Score calculations use 1-mile subset so scores stay accurate
     const amenitiesNear = amenities.filter((p: any) => (p.distance || 0) <= 1);
     const mobilityScores = calculateMobilityScoresFromPOIs(amenitiesNear, transitStops);
     const amenitiesScore = calculateAmenitiesScore(amenitiesNear);
 
-    console.log(`Data fetching completed in ${Date.now() - startTime}ms`);
+    // Fallback: when transit query fails, use static GTFS transit data
+    let staticTransitPOIs: any[] = [];
+    if (transitStops.length === 0) {
+      console.log('Transit empty – falling back to static GTFS data');
+      const staticStops = findTransitStopsNearby(lat, lng, 1);
+      staticTransitPOIs = staticStops.map(s => ({
+        id: s.id,
+        name: s.name,
+        category: 'transit',
+        subcategory: s.type === 'rail' ? 'station' : s.type === 'streetcar' ? 'tram_stop' : 'bus_stop',
+        coordinates: { lat: s.lat, lng: s.lng },
+        distance: haversineDistance(lat, lng, s.lat, s.lng),
+      }));
+      const staticTransit = getTransitMobilityScores(lat, lng);
+      mobilityScores.transitScore = staticTransit;
+      const newBike = calculateBikeScore(mobilityScores.walkScore.score, staticTransit.score);
+      mobilityScores.bikeScore = { score: newBike, description: getBikeScoreDescription(newBike) };
+    }
 
-    // Calculate vibe score
-    const vibeScore = calculateVibeScore(
+    console.log(`Data fetching completed in ${Date.now() - startTime}ms (amenities from ${amenitySource})`);
+
+    // Calculate vibe score (pass POIs for data-driven insights)
+    const allPOIs = [...amenities, ...staticTransitPOIs].filter(p => p.category !== 'transit');
+    const vibeScore = await calculateVibeScore(
       safetyScore,
       mobilityScores,
       amenitiesScore,
-      effectiveWeights
+      effectiveWeights,
+      allPOIs,
+      intent,
+      { city: geoResult.address.city || geoResult.address.town || 'Unknown', county: countyName.replace(' County', ''), zipCode }
     );
 
     // Build location object
@@ -333,17 +381,17 @@ router.post('/analyze', optionalAuth, async (req: AuthenticatedRequest, res: Res
       mobilityScores,
       amenitiesScore,
       vibeScore,
-      pois: [...amenities].sort((a: any, b: any) => (a.distance || 0) - (b.distance || 0)).slice(0, 100),
+      pois: [...amenities, ...staticTransitPOIs].sort((a: any, b: any) => (a.distance || 0) - (b.distance || 0)).slice(0, 100),
       dataQuality: determineDataQuality(safetyScore, mobilityScores, amenitiesScore),
       dataSources: [
         { name: 'FBI Crime Data Explorer', lastUpdated: safetyScore.lastUpdated, coverage: 'county' },
-        { name: 'OpenStreetMap', lastUpdated: mobilityScores.lastUpdated, coverage: 'full' },
-        { name: 'OpenStreetMap', lastUpdated: amenitiesScore.lastUpdated, coverage: 'full' },
+        { name: amenitySource,            lastUpdated: mobilityScores.lastUpdated, coverage: 'full' },
+        { name: amenitySource,            lastUpdated: amenitiesScore.lastUpdated, coverage: 'full' },
       ],
     };
 
-    // Cache the result
-    if (zipCode !== 'unknown') {
+    // Cache the result – only when we actually got amenity data (but not with AI insights since they vary by intent)
+    if (zipCode !== 'unknown' && amenities.length > 0 && !intent) {
       await cachePulse(zipCode, lat, lng, pulse);
     }
 
@@ -387,7 +435,7 @@ router.post('/analyze-address', optionalAuth, async (req: AuthenticatedRequest, 
       });
     }
 
-    const { address, weights, weightPreset } = validation.data;
+    const { address, weights, weightPreset, intent } = validation.data;
 
     // Determine weights to use
     const effectiveWeights: Partial<VibeFactors> = weightPreset
@@ -424,25 +472,66 @@ router.post('/analyze-address', optionalAuth, async (req: AuthenticatedRequest, 
     console.log('Fetching fresh data for address:', address);
     const startTime = Date.now();
 
-    const [safetyScore, amenities, transitStops] = await Promise.all([
+    // Run safety, transit, and Foursquare amenities in parallel.
+    // Foursquare returns null when not configured or rate-limited; we fall
+    // back to Overpass only in that case.
+    const [safetyScore, foursquarePOIs, transitStops] = await Promise.all([
       getSafetyScoreForLocation(countyName),
-      fetchAmenitiesInRadius(lat, lng, 8047), // 5 miles
+      fetchFoursquarePOIs(lat, lng, 8047),   // 5 miles
       fetchTransitStops(lat, lng, 1609),
     ]);
+
+    let amenities: any[];
+    let amenitySource: string;
+    if (foursquarePOIs && foursquarePOIs.length > 0) {
+      amenities     = foursquarePOIs;
+      amenitySource = 'Foursquare';
+    } else if (foursquarePOIs === null) {
+      // Not configured or rate-limited – try Overpass
+      amenities     = await fetchAmenitiesInRadius(lat, lng, 8047);
+      amenitySource = 'OpenStreetMap';
+    } else {
+      // Foursquare was called but returned 0 results – trust that, skip Overpass
+      amenities     = [];
+      amenitySource = 'Foursquare';
+    }
 
     // Score calculations use 1-mile subset so scores stay accurate
     const amenitiesNear = amenities.filter((p: any) => (p.distance || 0) <= 1);
     const mobilityScores = calculateMobilityScoresFromPOIs(amenitiesNear, transitStops);
     const amenitiesScore = calculateAmenitiesScore(amenitiesNear);
 
-    console.log(`Data fetching completed in ${Date.now() - startTime}ms`);
+    // Fallback: when transit query fails, use static GTFS transit data
+    let staticTransitPOIs: any[] = [];
+    if (transitStops.length === 0) {
+      console.log('Transit empty – falling back to static GTFS data');
+      const staticStops = findTransitStopsNearby(lat, lng, 1);
+      staticTransitPOIs = staticStops.map(s => ({
+        id: s.id,
+        name: s.name,
+        category: 'transit',
+        subcategory: s.type === 'rail' ? 'station' : s.type === 'streetcar' ? 'tram_stop' : 'bus_stop',
+        coordinates: { lat: s.lat, lng: s.lng },
+        distance: haversineDistance(lat, lng, s.lat, s.lng),
+      }));
+      const staticTransit = getTransitMobilityScores(lat, lng);
+      mobilityScores.transitScore = staticTransit;
+      const newBike = calculateBikeScore(mobilityScores.walkScore.score, staticTransit.score);
+      mobilityScores.bikeScore = { score: newBike, description: getBikeScoreDescription(newBike) };
+    }
 
-    // Calculate vibe score
-    const vibeScore = calculateVibeScore(
+    console.log(`Data fetching completed in ${Date.now() - startTime}ms (amenities from ${amenitySource})`);
+
+    // Calculate vibe score (pass POIs for data-driven insights)
+    const allPOIs = [...amenities, ...staticTransitPOIs].filter(p => p.category !== 'transit');
+    const vibeScore = await calculateVibeScore(
       safetyScore,
       mobilityScores,
       amenitiesScore,
-      effectiveWeights
+      effectiveWeights,
+      allPOIs,
+      intent,
+      { city: geoResult.address.city || geoResult.address.town || 'Unknown', county: countyName.replace(' County', ''), zipCode }
     );
 
     // Build location object
@@ -466,17 +555,17 @@ router.post('/analyze-address', optionalAuth, async (req: AuthenticatedRequest, 
       mobilityScores,
       amenitiesScore,
       vibeScore,
-      pois: [...amenities].sort((a: any, b: any) => (a.distance || 0) - (b.distance || 0)).slice(0, 100),
+      pois: [...amenities, ...staticTransitPOIs].sort((a: any, b: any) => (a.distance || 0) - (b.distance || 0)).slice(0, 100),
       dataQuality: determineDataQuality(safetyScore, mobilityScores, amenitiesScore),
       dataSources: [
         { name: 'FBI Crime Data Explorer', lastUpdated: safetyScore.lastUpdated, coverage: 'county' },
-        { name: 'OpenStreetMap', lastUpdated: mobilityScores.lastUpdated, coverage: 'full' },
-        { name: 'OpenStreetMap', lastUpdated: amenitiesScore.lastUpdated, coverage: 'full' },
+        { name: amenitySource,            lastUpdated: mobilityScores.lastUpdated, coverage: 'full' },
+        { name: amenitySource,            lastUpdated: amenitiesScore.lastUpdated, coverage: 'full' },
       ],
     };
 
-    // Cache the result
-    if (zipCode !== 'unknown') {
+    // Cache the result – only when we actually got amenity data (but not with AI insights since they vary by intent)
+    if (zipCode !== 'unknown' && amenities.length > 0 && !intent) {
       await cachePulse(zipCode, lat, lng, pulse);
     }
 
@@ -615,6 +704,24 @@ function formatPresetName(name: string): string {
     .split('_')
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+}
+
+function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 3959; // Earth radius in miles
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 100) / 100;
+}
+
+function getBikeScoreDescription(score: number): string {
+  if (score >= 90) return "Biker's Paradise";
+  if (score >= 70) return 'Very Bikeable';
+  if (score >= 50) return 'Bikeable';
+  if (score >= 25) return 'Somewhat Bikeable';
+  return 'Minimal Bike Infrastructure';
 }
 
 function getPresetDescription(name: string): string {
