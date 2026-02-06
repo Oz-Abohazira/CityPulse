@@ -116,7 +116,7 @@ const Index = () => {
           {/* Badge */}
           <div className="mb-8 inline-flex items-center gap-2 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 px-4 py-2 text-sm font-medium text-emerald-300">
             <Sparkles className="h-4 w-4" />
-            Georgia Neighborhood Intelligence - 100% Free Data
+            Georgia Neighborhood Intelligence
           </div>
 
           {/* Headline */}
@@ -129,11 +129,35 @@ const Index = () => {
           </h1>
 
           <p className="mb-12 text-lg text-white/70 md:text-xl max-w-2xl mx-auto">
-            Get instant insights on safety, walkability, transit access, and local amenities for any address or ZIP code. Make informed decisions with real data.
+            Get instant insights on safety, walkability, transit access, and local amenities for any address or ZIP code within the state of Georgia. Make informed decisions with real data.
           </p>
 
           {/* Search Box */}
           <div ref={searchRef} className="relative max-w-2xl mx-auto">
+            {/* Intent Selector */}
+            <div className="mb-4 flex items-center justify-center gap-3">
+              <span className="text-white/60 text-sm">Search Focus:</span>
+              <Select value={searchIntent} onValueChange={(v) => setSearchIntent(v as SearchIntent)}>
+                <SelectTrigger className="w-[280px] bg-white/10 border-white/20 text-white hover:bg-white/15 focus:ring-emerald-400/50">
+                  <SelectValue placeholder="Select your purpose" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-white/10">
+                  {INTENT_OPTIONS.map((option) => (
+                    <SelectItem
+                      key={option.value}
+                      value={option.value}
+                      className="text-white hover:bg-white/10 focus:bg-white/10 focus:text-white cursor-pointer"
+                    >
+                      <div className="flex flex-col py-1">
+                        <span className="font-medium">{option.label}</span>
+                        <span className="text-xs text-white/50">{option.description}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <form onSubmit={handleSearchSubmit}>
               <div className="relative">
                 <div className="absolute left-4 top-1/2 -translate-y-1/2 text-white/50">
@@ -164,30 +188,6 @@ const Index = () => {
               </div>
             </form>
 
-            {/* Intent Selector */}
-            <div className="mt-4 flex items-center justify-center gap-3">
-              <span className="text-white/60 text-sm">I'm</span>
-              <Select value={searchIntent} onValueChange={(v) => setSearchIntent(v as SearchIntent)}>
-                <SelectTrigger className="w-[280px] bg-white/10 border-white/20 text-white hover:bg-white/15 focus:ring-emerald-400/50">
-                  <SelectValue placeholder="Select your purpose" />
-                </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-white/10">
-                  {INTENT_OPTIONS.map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={option.value}
-                      className="text-white hover:bg-white/10 focus:bg-white/10 focus:text-white cursor-pointer"
-                    >
-                      <div className="flex flex-col py-1">
-                        <span className="font-medium">{option.label}</span>
-                        <span className="text-xs text-white/50">{option.description}</span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
             {/* Autocomplete Predictions */}
             {showPredictions && predictions.length > 0 && (
               <div className="absolute top-full left-0 right-0 mt-2 bg-slate-800/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50">
@@ -213,10 +213,10 @@ const Index = () => {
           {/* Quick Stats */}
           <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto">
             {[
+              { label: "Free to Use", value: "Forever" },
               { label: "Georgia Counties", value: "159" },
               { label: "ZIP Codes", value: "700+" },
-              { label: "Data Sources", value: "3" },
-              { label: "API Cost", value: "$0" },
+              { label: "Data Sources", value: "Multiple" },
             ].map((stat) => (
               <div key={stat.label} className="text-center">
                 <div className="text-2xl font-bold text-white">{stat.value}</div>
@@ -242,19 +242,19 @@ const Index = () => {
               {
                 icon: Shield,
                 title: "Safety Score",
-                description: "FBI crime data by county with safety index compared to national averages",
+                description: "County-level crime data with safety index compared to national averages",
                 color: "emerald",
               },
               {
                 icon: Footprints,
                 title: "Walkability",
-                description: "Custom walkability score calculated from OpenStreetMap amenity data",
+                description: "Custom walkability score based on nearby amenities and infrastructure",
                 color: "blue",
               },
               {
                 icon: Bus,
                 title: "Transit Access",
-                description: "Transit stops and routes from OpenStreetMap public transport data",
+                description: "Public transit stops and routes within walking distance",
                 color: "purple",
               },
               {
@@ -334,26 +334,6 @@ const Index = () => {
               </div>
             ))}
           </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className="relative z-10 py-24 bg-gradient-to-r from-emerald-600/20 to-cyan-600/20">
-        <div className="container mx-auto px-4 text-center">
-          <h2 className="text-3xl font-bold text-white mb-4">
-            Ready to Explore?
-          </h2>
-          <p className="text-white/70 mb-8 max-w-lg mx-auto">
-            Start analyzing neighborhoods now. No account required for basic searches.
-          </p>
-          <Button
-            onClick={() => document.querySelector('input')?.focus()}
-            size="lg"
-            className="bg-white text-slate-900 hover:bg-white/90 font-medium px-8"
-          >
-            Get Started
-            <ArrowRight className="ml-2 h-4 w-4" />
-          </Button>
         </div>
       </section>
 

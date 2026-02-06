@@ -142,3 +142,7 @@
     box-shadow: var(--shadow-xl);
   }
 }
+
+body {
+  scroll-behavior: smooth;
+}

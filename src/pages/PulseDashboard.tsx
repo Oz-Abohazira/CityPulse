@@ -23,6 +23,8 @@ import {
   Scale,
   List,
   Map,
+  Sparkles,
+  Navigation,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import POIMap, { CATEGORY_STYLES, DEFAULT_STYLE } from "@/components/POIMap";
@@ -169,6 +171,58 @@ function getGradeColor(grade: SafetyScore['grade']): string {
   return "bg-gradient-to-br from-rose-400 to-rose-600";
 }
 
+// Loading steps configuration
+const LOADING_STEPS = [
+  {
+    text: "Locating address on map...",
+    icon: MapPin,
+    color: "text-emerald-400",
+    bgColor: "bg-emerald-500/20",
+  },
+  {
+    text: "Fetching safety data from FBI sources...",
+    icon: Shield,
+    color: "text-blue-400",
+    bgColor: "bg-blue-500/20",
+  },
+  {
+    text: "Analyzing nearby streets and walkways...",
+    icon: Navigation,
+    color: "text-cyan-400",
+    bgColor: "bg-cyan-500/20",
+  },
+  {
+    text: "Finding transit options...",
+    icon: Bus,
+    color: "text-purple-400",
+    bgColor: "bg-purple-500/20",
+  },
+  {
+    text: "Discovering local amenities...",
+    icon: ShoppingCart,
+    color: "text-amber-400",
+    bgColor: "bg-amber-500/20",
+  },
+  {
+    text: "Calculating neighborhood vibe...",
+    icon: Sparkles,
+    color: "text-pink-400",
+    bgColor: "bg-pink-500/20",
+  },
+];
+
+function AnimatedLoadingStep({ step }: { step: typeof LOADING_STEPS[0] }) {
+  const Icon = step.icon;
+  return (
+    <div className="flex items-center gap-3 animate-fade-in">
+      <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", step.bgColor)}>
+        <Icon className={cn("h-5 w-5 animate-pulse", step.color)} />
+      </div>
+      <span className="text-white/70 text-sm">{step.text}</span>
+    </div>
+  );
+}
+
 function POIIcon({ category, color, size = "h-4 w-4" }: { category: string; color?: string; size?: string }) {
   const icons: Record<string, React.ElementType> = {
     grocery: Store,
@@ -201,12 +255,32 @@ export default function PulseDashboard() {
   const [maxDistance, setMaxDistance] = useState(2);
   const [viewMode, setViewMode] = useState<"list" | "map">("map");
   const [filterCategory, setFilterCategory] = useState<string | null>(null);
+  const [loadingStepIndex, setLoadingStepIndex] = useState(0);
+  const [selectedPoiId, setSelectedPoiId] = useState<string | null>(null);
 
   // Get params from URL
   const lat = searchParams.get("lat");
   const lng = searchParams.get("lng");
   const address = searchParams.get("address");
   const intent = searchParams.get("intent") as SearchIntent | null;
+
+  // Cycle through loading steps - go through all steps once
+  useEffect(() => {
+    if (!isLoading) return;
+
+    const interval = setInterval(() => {
+      setLoadingStepIndex((prev) => {
+        const next = prev + 1;
+        // Loop back to start if we've gone through all steps
+        if (next >= LOADING_STEPS.length) {
+          return 0;
+        }
+        return next;
+      });
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   useEffect(() => {
     async function fetchPulse() {
@@ -245,12 +319,15 @@ export default function PulseDashboard() {
   }, [lat, lng, address, weightPreset, intent]);
 
   if (isLoading) {
+    const currentStep = LOADING_STEPS[loadingStepIndex];
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-900 flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="h-12 w-12 animate-spin text-emerald-400 mx-auto mb-4" />
-          <p className="text-white/70">Analyzing neighborhood...</p>
-          <p className="text-sm text-white/50 mt-2">Fetching data from FBI, OpenStreetMap, and Nominatim</p>
+          <p className="text-white/70 mb-6">Analyzing neighborhood...</p>
+          <div key={loadingStepIndex} className="animate-fade-in">
+            <AnimatedLoadingStep step={currentStep} />
+          </div>
         </div>
       </div>
     );
@@ -280,6 +357,12 @@ export default function PulseDashboard() {
   const allPois = ((pois as any[]) || []).filter((poi) => poi.category !== "transit");
   const displayPois = allPois.filter((poi) => (poi.distance || 0) <= maxDistance);
   const shownPois = filterCategory ? displayPois.filter((p: any) => p.category === filterCategory) : displayPois;
+
+  // Handle POI selection from list
+  const handlePoiClick = (poiId: string) => {
+    setSelectedPoiId(poiId);
+    setViewMode("map");
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-900">
@@ -533,7 +616,7 @@ export default function PulseDashboard() {
                   <div className="text-4xl font-bold text-blue-400 mb-2">{mobilityScores.walkScore.score}</div>
                   <p className="text-white/60">{mobilityScores.walkScore.description}</p>
                   <div className="mt-4 text-xs text-white/40">
-                    Calculated from OpenStreetMap amenity density
+                    Calculated based on amenity density
                   </div>
                 </CardContent>
               </Card>
@@ -675,16 +758,22 @@ export default function PulseDashboard() {
                     center={location.coordinates}
                     pois={shownPois}
                     radiusMiles={maxDistance}
+                    selectedPoiId={selectedPoiId}
+                    initialZoom={13}
                   />
                 ) : shownPois.length > 0 ? (
                   <div className="space-y-3 max-h-96 overflow-y-auto">
                     {shownPois.map((poi: any) => (
-                      <div key={poi.id} className="flex items-center justify-between bg-white/5 rounded-lg p-3">
+                      <button
+                        key={poi.id}
+                        onClick={() => handlePoiClick(poi.id)}
+                        className="w-full flex items-center justify-between bg-white/5 hover:bg-white/10 rounded-lg p-3 transition-colors cursor-pointer"
+                      >
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center text-white/70">
                             <POIIcon category={poi.category} />
                           </div>
-                          <div>
+                          <div className="text-left">
                             <div className="text-white font-medium">{poi.name}</div>
                             <div className="text-xs text-white/50 capitalize">{poi.category.replace("_", " ")}</div>
                           </div>
@@ -692,7 +781,7 @@ export default function PulseDashboard() {
                         <div className="text-right">
                           <div className="text-white/70">{poi.distance?.toFixed(2)} mi</div>
                         </div>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 ) : (
@@ -704,6 +793,19 @@ export default function PulseDashboard() {
           </TabsContent>
         </Tabs>
       </main>
+
+      {/* Footer */}
+      <footer className="relative z-10 border-t border-white/10 py-8">
+        <div className="container mx-auto flex flex-col items-center justify-between gap-4 px-4 md:flex-row">
+          <div className="flex items-center gap-2">
+            <img src="/city-pulse-logo.png" alt="CityPulse" className="h-5 w-5 rounded" />
+            <span className="font-semibold text-white">CityPulse</span>
+          </div>
+          <p className="text-sm text-white/50">
+            © 2026 CityPulse. Neighborhood Intelligence Platform.
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }

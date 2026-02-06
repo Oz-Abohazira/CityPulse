@@ -14,8 +14,21 @@ interface ApiConfig {
   timeout: number;
 }
 
+// Only use localhost fallback in development to prevent local network access popup in production
+const getDefaultBaseUrl = (): string => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  // In production without VITE_API_URL, use relative path (same origin)
+  if (import.meta.env.PROD) {
+    return '/api';
+  }
+  // In development, use localhost
+  return 'http://localhost:3001/api';
+};
+
 const config: ApiConfig = {
-  baseUrl: import.meta.env.VITE_API_URL || 'http://localhost:3001/api',
+  baseUrl: getDefaultBaseUrl(),
   timeout: 90000,
 };
 

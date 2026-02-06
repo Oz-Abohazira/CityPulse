@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Circle, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -71,18 +71,24 @@ const CENTER_ICON = L.divIcon({
 // Fit map to radius circle on mount
 // -------------------------------------------------------------------------
 
-function FitCircle({ center, radiusMeters }: { center: { lat: number; lng: number }; radiusMeters: number }) {
+function FitCircle({ center, radiusMeters, zoomLevel }: { center: { lat: number; lng: number }; radiusMeters: number; zoomLevel?: number }) {
   const map = useMap();
   useEffect(() => {
-    const latOffset = radiusMeters / 111000;
-    const lngOffset = radiusMeters / (111000 * Math.cos((center.lat * Math.PI) / 180));
-    map.fitBounds(
-      L.latLngBounds(
-        [center.lat - latOffset, center.lng - lngOffset],
-        [center.lat + latOffset, center.lng + lngOffset]
-      ),
-      { padding: [40, 40] }
-    );
+    if (zoomLevel !== undefined) {
+      // Use custom zoom level if provided
+      map.setView([center.lat, center.lng], zoomLevel);
+    } else {
+      // Auto-fit to radius
+      const latOffset = radiusMeters / 111000;
+      const lngOffset = radiusMeters / (111000 * Math.cos((center.lat * Math.PI) / 180));
+      map.fitBounds(
+        L.latLngBounds(
+          [center.lat - latOffset, center.lng - lngOffset],
+          [center.lat + latOffset, center.lng + lngOffset]
+        ),
+        { padding: [40, 40] }
+      );
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return null;
 }
@@ -102,9 +108,59 @@ interface POIMapProps {
     address?: string;
   }>;
   radiusMiles: number;
+  selectedPoiId?: string | null;
+  initialZoom?: number;
 }
 
-export default function POIMap({ center, pois, radiusMiles }: POIMapProps) {
+// Component to handle POI marker with selection
+function POIMarker({ poi, isSelected }: { poi: any; isSelected: boolean }) {
+  const markerRef = useRef<any>(null);
+  const map = useMap();
+
+  useEffect(() => {
+    if (isSelected && markerRef.current) {
+      // Pan to marker and open popup
+      map.setView([poi.coordinates.lat, poi.coordinates.lng], map.getZoom(), { animate: true });
+      setTimeout(() => {
+        // Access the Leaflet marker instance
+        const leafletMarker = markerRef.current;
+        if (leafletMarker && leafletMarker.openPopup) {
+          leafletMarker.openPopup();
+        }
+      }, 300); // Small delay to let the pan animation start
+    }
+  }, [isSelected, map, poi.coordinates]);
+
+  return (
+    <Marker
+      ref={markerRef}
+      position={[poi.coordinates.lat, poi.coordinates.lng]}
+      icon={getMarkerIcon(poi.category)}
+    >
+      <Popup>
+        <div className="text-sm min-w-[130px]">
+          <div className="font-semibold text-gray-800">{poi.name}</div>
+          <div className="text-gray-500 capitalize">{poi.category}</div>
+          {poi.distance != null && (
+            <div className="text-gray-500">{poi.distance.toFixed(2)} mi</div>
+          )}
+          <a
+            href={poi.address
+              ? `https://www.google.com/maps/search/?q=${encodeURIComponent(`${poi.name}, ${poi.address}`)}`
+              : `https://www.google.com/maps/?q=${poi.coordinates.lat},${poi.coordinates.lng}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline text-xs mt-1 inline-block"
+          >
+            Open in Google Maps →
+          </a>
+        </div>
+      </Popup>
+    </Marker>
+  );
+}
+
+export default function POIMap({ center, pois, radiusMiles, selectedPoiId, initialZoom }: POIMapProps) {
   const mappablePois = pois.filter(
     (p) => p.coordinates?.lat != null && p.coordinates?.lng != null
   );
@@ -114,12 +170,12 @@ export default function POIMap({ center, pois, radiusMiles }: POIMapProps) {
   return (
     <MapContainer
         center={[center.lat, center.lng]}
-        zoom={14}
+        zoom={initialZoom || 14}
         scrollWheelZoom={false}
         style={{ height: "400px" }}
         className="w-full rounded-lg border border-white/10"
       >
-        <FitCircle center={center} radiusMeters={radiusMeters} />
+        <FitCircle center={center} radiusMeters={radiusMeters} zoomLevel={initialZoom} />
 
         {/* Dark basemap – free, attribution-only license */}
         <TileLayer
@@ -145,31 +201,11 @@ export default function POIMap({ center, pois, radiusMiles }: POIMapProps) {
 
         {/* POI markers */}
         {mappablePois.map((poi) => (
-          <Marker
+          <POIMarker
             key={poi.id}
-            position={[poi.coordinates!.lat, poi.coordinates!.lng]}
-            icon={getMarkerIcon(poi.category)}
-          >
-            <Popup>
-              <div className="text-sm min-w-[130px]">
-                <div className="font-semibold text-gray-800">{poi.name}</div>
-                <div className="text-gray-500 capitalize">{poi.category}</div>
-                {poi.distance != null && (
-                  <div className="text-gray-500">{poi.distance.toFixed(2)} mi</div>
-                )}
-                <a
-                  href={poi.address
-                    ? `https://www.google.com/maps/search/?q=${encodeURIComponent(`${poi.name}, ${poi.address}`)}`
-                    : `https://www.google.com/maps/?q=${poi.coordinates!.lat},${poi.coordinates!.lng}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline text-xs mt-1 inline-block"
-                >
-                  Open in Google Maps →
-                </a>
-              </div>
-            </Popup>
-          </Marker>
+            poi={poi}
+            isSelected={poi.id === selectedPoiId}
+          />
         ))}
     </MapContainer>
   );
