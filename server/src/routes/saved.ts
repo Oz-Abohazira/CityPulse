@@ -19,10 +19,10 @@ router.use(requireAuth);
 // -----------------------------------------------------------------------------
 
 const saveLocationSchema = z.object({
-  placeId: z.string().min(1),
   address: z.string().min(1),
   city: z.string().min(1),
-  state: z.string().min(1),
+  county: z.string().default(''),
+  state: z.string().default('GA'),
   zipCode: z.string().min(1),
   lat: z.number(),
   lng: z.number(),
@@ -85,9 +85,9 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
     // Check if already saved
     const existing = await prisma.savedLocation.findUnique({
       where: {
-        userId_placeId: {
+        userId_address: {
           userId,
-          placeId: data.placeId,
+          address: data.address,
         },
       },
     });
@@ -99,9 +99,9 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
     const savedLocation = await prisma.savedLocation.create({
       data: {
         userId,
-        placeId: data.placeId,
         address: data.address,
         city: data.city,
+        county: data.county,
         state: data.state,
         zipCode: data.zipCode,
         lat: data.lat,
@@ -132,7 +132,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
 router.get('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const savedLocation = await prisma.savedLocation.findFirst({
       where: { id, userId },
@@ -167,7 +167,7 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFu
 router.patch('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const validation = updateLocationSchema.safeParse(req.body);
 
@@ -210,7 +210,7 @@ router.patch('/:id', async (req: AuthenticatedRequest, res: Response, next: Next
 router.delete('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     // Verify ownership
     const existing = await prisma.savedLocation.findFirst({

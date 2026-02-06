@@ -5,7 +5,7 @@
 // API Docs: https://wiki.openstreetmap.org/wiki/Overpass_API
 
 import axios from 'axios';
-import type { POI, AmenitiesScore } from '../../../src/types/index.js';
+import type { POI, AmenitiesScore } from '../types.js';
 
 // Public Overpass API endpoints – tried in order; first success wins.
 const OVERPASS_MIRRORS = [
@@ -261,14 +261,12 @@ function osmNodeToPOI(node: OSMNode, refLat: number, refLng: number): POI {
     name: tags.name || `${category.charAt(0).toUpperCase() + category.slice(1)}`,
     category: category as POI['category'],
     subcategory: tags.cuisine || tags.shop || tags.amenity || tags.leisure,
-    address,
+    address: address || '',
     coordinates: { lat, lng },
     distance: calculateDistance(refLat, refLng, lat, lng),
+    walkingTime: Math.round((calculateDistance(refLat, refLng, lat, lng) / 80) * 60), // ~80m/min walk
     rating: undefined, // OSM doesn't have ratings
     priceLevel: undefined,
-    phone: tags.phone,
-    website: tags.website,
-    openNow: undefined, // Would need to parse opening_hours
   };
 }
 

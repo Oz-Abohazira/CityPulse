@@ -88,11 +88,14 @@ router.post('/', optionalAuth, async (req: AuthenticatedRequest, res: Response, 
       }
 
       // Get county for safety data
+      const cityName = geocodeResult.address.city || geocodeResult.address.town || '';
+      const zipCode = geocodeResult.address.postcode || '';
+
       const county = await prisma.georgiaCounty.findFirst({
         where: {
           OR: [
-            { cities: { some: { name: { contains: geocodeResult.city || '' } } } },
-            { zipCodes: { some: { zipCode: geocodeResult.zipCode || '' } } },
+            { cities: { some: { name: { contains: cityName } } } },
+            { zipCodes: { some: { zipCode: zipCode } } },
           ],
         },
       });
@@ -101,19 +104,30 @@ router.post('/', optionalAuth, async (req: AuthenticatedRequest, res: Response, 
       const amenities = await fetchAmenitiesInRadius(lat, lng, 1500);
 
       // Calculate mobility scores
-      const mobilityScores = calculateMobilityScoresFromPOIs(amenities);
+      const mobilityScores = calculateMobilityScoresFromPOIs(amenities, []);
 
       // Build safety score from county data
       const safetyScore: SafetyScore = {
-        score: county?.safetyScore || 50,
-        grade: (county?.safetyGrade as 'A' | 'B' | 'C' | 'D' | 'F') || 'C',
-        crimeIndex: county?.violentCrimeRate ? Math.round(county.violentCrimeRate / 4) : 50,
-        violentCrimeRate: county?.violentCrimeRate || null,
-        propertyCrimeRate: county?.propertyCrimeRate || null,
+        overall: county?.safetyScore || 50,
+        grade: (county?.safetyGrade as SafetyScore['grade']) || 'C',
+        riskLevel: county?.safetyScore && county.safetyScore >= 70 ? 'low' : county?.safetyScore && county.safetyScore >= 50 ? 'moderate' : 'high',
         trend: 'stable',
-        comparedToNational: county?.safetyScore && county.safetyScore > 50 ? 'below' : 'above',
+        vsNational: 0,
+        crimeRates: {
+          violent: county?.violentCrimeRate || 0,
+          property: county?.propertyCrimeRate || 0,
+          total: (county?.violentCrimeRate || 0) + (county?.propertyCrimeRate || 0),
+        },
+        breakdown: {
+          murder: 0,
+          robbery: 0,
+          assault: 0,
+          burglary: 0,
+          theft: 0,
+          vehicleTheft: 0,
+        },
         dataSource: 'FBI Crime Data Explorer',
-        dataYear: county?.crimeDataYear || 2022,
+        lastUpdated: new Date().toISOString(),
       };
 
       // Build amenities score
@@ -126,36 +140,55 @@ router.post('/', optionalAuth, async (req: AuthenticatedRequest, res: Response, 
         gyms: amenities.filter(a => a.category === 'gym').length,
       };
 
-      const essentialsScore = Math.min(100, (amenityCounts.grocery * 20) + (amenityCounts.pharmacies * 25));
+      const groceryScore = Math.min(100, amenityCounts.grocery * 20);
       const diningScore = Math.min(100, (amenityCounts.restaurants * 5) + (amenityCounts.cafes * 8));
-      const lifestyleScore = Math.min(100, (amenityCounts.parks * 15) + (amenityCounts.gyms * 20));
+      const healthcareScore = Math.min(100, amenityCounts.pharmacies * 25);
+      const entertainmentScore = Math.min(100, amenityCounts.parks * 15);
+      const shoppingScore = Math.min(100, amenityCounts.gyms * 20);
+      const overallAmenityScore = Math.round((groceryScore + diningScore + healthcareScore + entertainmentScore + shoppingScore) / 5);
 
       const amenitiesScore: AmenitiesScore = {
-        overallScore: Math.round((essentialsScore + diningScore + lifestyleScore) / 3),
-        essentialsScore,
-        diningScore,
-        lifestyleScore,
-        counts: amenityCounts,
+        overall: overallAmenityScore,
+        categories: {
+          grocery: groceryScore,
+          dining: diningScore,
+          healthcare: healthcareScore,
+          entertainment: entertainmentScore,
+          shopping: shoppingScore,
+        },
+        highlights: {
+          totalPOIs: amenities.length,
+          groceryStores: amenityCounts.grocery,
+          restaurants: amenityCounts.restaurants,
+          healthcare: amenityCounts.pharmacies,
+          parks: amenityCounts.parks,
+          gyms: amenityCounts.gyms,
+        },
+        isFoodDesert: amenityCounts.grocery === 0,
+        nearestByCategory: {},
         nearby: amenities.slice(0, 20).map(a => ({
           name: a.name,
           category: a.category,
           distance: a.distance,
           rating: null,
         })),
+        dataSource: 'OpenStreetMap',
+        lastUpdated: new Date().toISOString(),
       };
 
       // Calculate vibe score
-      const vibeScore = calculateVibeScore(safetyScore, mobilityScores, amenitiesScore);
+      const vibeScore = await calculateVibeScore(safetyScore, mobilityScores, amenitiesScore);
 
       const pulse: LocationPulse = {
         id: `pulse_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         location: {
-          placeId: geocodeResult.placeId,
+          placeId: geocodeResult.osmId?.toString() || `osm_${Date.now()}`,
           formattedAddress: geocodeResult.displayName,
-          city: geocodeResult.city || '',
+          city: cityName,
           state: 'Georgia',
-          zipCode: geocodeResult.zipCode || '',
+          zipCode: zipCode,
           county: county?.name || '',
+          country: 'USA',
           coordinates: { lat, lng },
         },
         analyzedAt: new Date(),
@@ -281,7 +314,7 @@ router.get('/saved', requireAuth, async (req: AuthenticatedRequest, res: Respons
 router.delete('/saved/:id', requireAuth, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.userId;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const existing = await prisma.comparison.findFirst({
       where: { id, userId },
@@ -328,7 +361,7 @@ function buildComparisonMetrics(pulses: LocationPulse[]): ComparisonMetric[] {
   });
 
   // Safety Score
-  const safetyScores = pulses.map((p) => p.safetyScore.score);
+  const safetyScores = pulses.map((p) => p.safetyScore.overall);
   metrics.push({
     name: 'Safety Score',
     values: safetyScores,
@@ -355,7 +388,7 @@ function buildComparisonMetrics(pulses: LocationPulse[]): ComparisonMetric[] {
   });
 
   // Amenities Score
-  const amenityScores = pulses.map((p) => p.amenitiesScore.overallScore);
+  const amenityScores = pulses.map((p) => p.amenitiesScore.overall);
   metrics.push({
     name: 'Amenities Score',
     values: amenityScores,
@@ -363,13 +396,13 @@ function buildComparisonMetrics(pulses: LocationPulse[]): ComparisonMetric[] {
     difference: Math.max(...amenityScores) - Math.min(...amenityScores),
   });
 
-  // Essentials Score
-  const essentialsScores = pulses.map((p) => p.amenitiesScore.essentialsScore);
+  // Grocery Score
+  const groceryScores = pulses.map((p) => p.amenitiesScore.categories.grocery);
   metrics.push({
-    name: 'Essentials Access',
-    values: essentialsScores,
-    winner: indexOfMax(essentialsScores),
-    difference: Math.max(...essentialsScores) - Math.min(...essentialsScores),
+    name: 'Grocery Access',
+    values: groceryScores,
+    winner: indexOfMax(groceryScores),
+    difference: Math.max(...groceryScores) - Math.min(...groceryScores),
   });
 
   return metrics;

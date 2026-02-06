@@ -189,6 +189,9 @@ export interface PointOfInterest {
   photoUrl?: string;
 }
 
+// Type alias for backward compatibility
+export type POI = PointOfInterest;
+
 export interface AmenityDensity {
   category: POICategory;
   count: number;

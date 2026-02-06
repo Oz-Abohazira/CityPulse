@@ -6,7 +6,7 @@
 // Source: https://cde.ucr.cjis.gov/
 // =============================================================================
 
-import type { SafetyScore } from '../../../src/types/index.js';
+import type { SafetyScore } from '../types.js';
 import {
   GEORGIA_CRIME_DATA,
   CRIME_DATA_BY_FIPS,

@@ -5,7 +5,7 @@
 // pre-downloaded GTFS data from Georgia transit agencies
 // =============================================================================
 
-import type { MobilityScores } from '../../../src/types/index.js';
+import type { MobilityScores } from '../types.js';
 import {
   findTransitStopsNearby,
   findNearestTransitStop,

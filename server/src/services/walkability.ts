@@ -4,7 +4,7 @@
 // Calculates walkability, transit, and bike scores based on amenity density
 // Inspired by Walk Score methodology but using free OSM data
 
-import type { MobilityScores, POI } from '../../../src/types/index.js';
+import type { MobilityScores, POI } from '../types.js';
 import { fetchAmenitiesInRadius, fetchTransitStops } from './osm-amenities.js';
 
 // Distance decay weights (closer = more valuable)

@@ -1,60 +1,7 @@
 // =============================================================================
-// CITYPULSE SERVER - SHARED TYPE DEFINITIONS
-// Re-export from main types + server-specific types
+// CITYPULSE SERVER - TYPE DEFINITIONS
+// All types defined locally for server-side use
 // =============================================================================
-
-// Re-export all types (these match the frontend types)
-export type {
-  Coordinates,
-  Location,
-  SearchQuery,
-  CrimeCategory,
-  SafetyGrade,
-  CrimeIncident,
-  CrimeStats,
-  SafetyScore,
-  WalkabilityCategory,
-  TransitCategory,
-  BikeCategory,
-  WalkScore,
-  TransitScore,
-  BikeScore,
-  TransitStop,
-  MobilityScores,
-  POICategory,
-  PointOfInterest,
-  AmenityDensity,
-  AmenitiesScore,
-  VibeLabel,
-  VibeConfidence,
-  VibeFactors,
-  VibeScore,
-  LocationPulse,
-  DataSource,
-  LocationComparison,
-  ComparisonMetric,
-  User,
-  UserPreferences,
-  SavedLocation,
-  ApiResponse,
-  ApiError,
-  PaginatedResponse,
-  ApiProviderStatus,
-  ApiProvider,
-  MapLayer,
-  MapViewport,
-  MapConfig,
-  AuthState,
-  LoginCredentials,
-  RegisterData,
-} from '../src/types/index.js';
-
-// Note: The path above assumes types are shared. In practice, you'd either:
-// 1. Copy types to server/src/types.ts
-// 2. Use a shared package in the monorepo
-// 3. Generate types from a schema
-
-// For now, let's define the types directly here for the server:
 
 // =============================================================================
 // Core Location Types
@@ -71,6 +18,7 @@ export interface Location {
   coordinates: Coordinates;
   neighborhood?: string;
   city: string;
+  county?: string;
   state: string;
   zipCode: string;
   country: string;
@@ -219,6 +167,7 @@ export interface PointOfInterest {
   id: string;
   name: string;
   category: POICategory;
+  subcategory?: string;
   address: string;
   coordinates: Coordinates;
   distance: number;
@@ -230,6 +179,9 @@ export interface PointOfInterest {
   openingHours?: string[];
   photoUrl?: string;
 }
+
+// Type alias for backward compatibility
+export type POI = PointOfInterest;
 
 export interface AmenityDensity {
   category: POICategory;
@@ -322,8 +274,8 @@ export type SearchIntent =
 
 export interface DataSource {
   name: string;
-  lastUpdated: Date;
-  coverage: 'full' | 'partial' | 'none';
+  lastUpdated: Date | string;
+  coverage: 'full' | 'partial' | 'none' | 'county';
 }
 
 export interface LocationPulse {
@@ -334,6 +286,7 @@ export interface LocationPulse {
   mobilityScores: MobilityScores;
   amenitiesScore: AmenitiesScore;
   vibeScore: VibeScore;
+  pois?: POI[];
   dataQuality: 'complete' | 'partial' | 'limited';
   dataSources: DataSource[];
 }

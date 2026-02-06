@@ -16,7 +16,7 @@ import { getTransitMobilityScores } from '../services/transit.js';
 import { findTransitStopsNearby } from '../data/georgia-transit-data.js';
 import { geocode, reverseGeocode, searchPlaces } from '../services/nominatim.js';
 import { calculateVibeScore, WEIGHT_PRESETS } from '../services/vibe.js';
-import type { LocationPulse, SafetyScore, MobilityScores, AmenitiesScore, VibeFactors, Location } from '../../../src/types/index.js';
+import type { LocationPulse, SafetyScore, MobilityScores, AmenitiesScore, VibeFactors, Location } from '../types.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -264,7 +264,7 @@ router.post('/analyze', optionalAuth, async (req: AuthenticatedRequest, res: Res
     // Determine weights to use
     const effectiveWeights: Partial<VibeFactors> = weightPreset
       ? WEIGHT_PRESETS[weightPreset]
-      : weights;
+      : weights || {};
 
     // Reverse geocode to get address info
     const geoResult = await reverseGeocode(lat, lng);
@@ -440,7 +440,7 @@ router.post('/analyze-address', optionalAuth, async (req: AuthenticatedRequest, 
     // Determine weights to use
     const effectiveWeights: Partial<VibeFactors> = weightPreset
       ? WEIGHT_PRESETS[weightPreset]
-      : weights;
+      : weights || {};
 
     // Geocode the address
     const geoResult = await geocode(address, true); // Limit to Georgia
