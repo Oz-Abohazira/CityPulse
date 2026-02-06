@@ -5,10 +5,9 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@prisma/client';
 import { ApiError } from '../middleware/errorHandler.js';
 import { optionalAuth, type AuthenticatedRequest } from '../middleware/auth.js';
-import { calculateSafetyScore, GEORGIA_COUNTIES, fetchCountyCrimeData } from '../services/fbi-crime.js';
+import { calculateSafetyScore, getCountyCrimeDataByName, getAllGeorgiaCounties } from '../services/fbi-crime.js';
 import { fetchAmenitiesInRadius, fetchTransitStops, calculateAmenitiesScore } from '../services/osm-amenities.js';
 import { fetchFoursquarePOIs } from '../services/foursquare.js';
 import { calculateMobilityScoresFromPOIs, calculateBikeScore } from '../services/walkability.js';
@@ -16,10 +15,10 @@ import { getTransitMobilityScores } from '../services/transit.js';
 import { findTransitStopsNearby } from '../data/georgia-transit-data.js';
 import { geocode, reverseGeocode, searchPlaces } from '../services/nominatim.js';
 import { calculateVibeScore, WEIGHT_PRESETS } from '../services/vibe.js';
+import { safeDbOperation } from '../lib/prisma.js';
 import type { LocationPulse, SafetyScore, MobilityScores, AmenitiesScore, VibeFactors, Location } from '../types.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // -----------------------------------------------------------------------------
 // Validation Schemas
@@ -59,23 +58,25 @@ const pulseByAddressSchema = z.object({
 const CACHE_TTL_HOURS = 24;
 
 async function getCachedPulse(zipCode: string): Promise<LocationPulse | null> {
-  try {
-    const cached = await prisma.pulseCache.findUnique({
+  const cached = await safeDbOperation(async (prisma) => {
+    return prisma.pulseCache.findUnique({
       where: { zipCode },
     });
+  });
 
-    if (!cached || !cached.pulseData) {
-      return null;
-    }
+  if (!cached || !cached.pulseData) {
+    return null;
+  }
 
-    // Check if cache is still valid
-    const cacheAge = Date.now() - cached.updatedAt.getTime();
-    const maxAge = CACHE_TTL_HOURS * 60 * 60 * 1000;
+  // Check if cache is still valid
+  const cacheAge = Date.now() - cached.updatedAt.getTime();
+  const maxAge = CACHE_TTL_HOURS * 60 * 60 * 1000;
 
-    if (cacheAge > maxAge) {
-      return null;
-    }
+  if (cacheAge > maxAge) {
+    return null;
+  }
 
+  try {
     return JSON.parse(cached.pulseData) as LocationPulse;
   } catch {
     return null;
@@ -83,8 +84,8 @@ async function getCachedPulse(zipCode: string): Promise<LocationPulse | null> {
 }
 
 async function cachePulse(zipCode: string, lat: number, lng: number, pulse: LocationPulse): Promise<void> {
-  try {
-    await prisma.pulseCache.upsert({
+  await safeDbOperation(async (prisma) => {
+    return prisma.pulseCache.upsert({
       where: { zipCode },
       update: {
         pulseData: JSON.stringify(pulse),
@@ -98,104 +99,25 @@ async function cachePulse(zipCode: string, lat: number, lng: number, pulse: Loca
         pulseData: JSON.stringify(pulse),
       },
     });
-  } catch (error) {
-    console.error('Failed to cache pulse data:', error);
-  }
+  });
 }
 
 // -----------------------------------------------------------------------------
-// Get Safety Score – DB cache → live FBI API → national-average fallback
+// Get Safety Score – Static data → fallback to national averages
+// Uses static georgia-crime-data.ts for serverless compatibility
 // -----------------------------------------------------------------------------
 
-async function getSafetyScoreForLocation(countyName: string): Promise<SafetyScore> {
+function getSafetyScoreForLocation(countyName: string): SafetyScore {
   const cleanName = countyName.replace(' County', '').trim();
 
-  // 1. Try cached row in database
-  const county = await prisma.georgiaCounty.findFirst({
-    where: { name: { contains: cleanName } },
-  });
+  // Use static crime data from georgia-crime-data.ts
+  const crimeData = getCountyCrimeDataByName(cleanName);
 
-  if (county && county.safetyScore !== null) {
-    return {
-      overall: county.safetyScore,
-      grade: (county.safetyGrade || 'C') as SafetyScore['grade'],
-      riskLevel: scoreToRiskLevel(county.safetyScore),
-      trend: 'stable',
-      vsNational: calculateVsNational(county.violentCrimeRate, county.propertyCrimeRate),
-      crimeRates: {
-        violent: county.violentCrimeRate || 0,
-        property: county.propertyCrimeRate || 0,
-        total: (county.violentCrimeRate || 0) + (county.propertyCrimeRate || 0),
-      },
-      breakdown: {
-        murder: rateToScore(county.murderRate || 0, 6.3),
-        robbery: rateToScore(county.robberyRate || 0, 73.9),
-        assault: rateToScore(county.assaultRate || 0, 268.2),
-        burglary: rateToScore(county.burglaryRate || 0, 269.8),
-        theft: rateToScore(county.larcenyRate || 0, 1401.9),
-        vehicleTheft: rateToScore(county.vehicleTheftRate || 0, 282.7),
-      },
-      dataSource: `FBI Crime Data Explorer (${county.crimeDataYear || 2022})`,
-      lastUpdated: new Date().toISOString(),
-    };
+  if (crimeData) {
+    return calculateSafetyScore(crimeData.rates);
   }
 
-  // 2. Not cached – fetch live from FBI Crime Data Explorer
-  const fips = GEORGIA_COUNTIES[cleanName];
-  if (fips) {
-    try {
-      console.log(`Fetching live FBI crime data for ${cleanName} (FIPS ${fips})`);
-      const crimeData = await fetchCountyCrimeData(fips);
-
-      if (crimeData) {
-        const safetyResult = calculateSafetyScore(crimeData.rates);
-
-        // Cache in DB so next request is instant
-        await prisma.georgiaCounty.upsert({
-          where: { fips },
-          update: {
-            name: cleanName,
-            population: crimeData.population,
-            violentCrimeRate: crimeData.rates.violentCrime,
-            propertyCrimeRate: crimeData.rates.propertyCrime,
-            murderRate: crimeData.rates.murder,
-            robberyRate: crimeData.rates.robbery,
-            assaultRate: crimeData.rates.assault,
-            burglaryRate: crimeData.rates.burglary,
-            larcenyRate: crimeData.rates.larceny,
-            vehicleTheftRate: crimeData.rates.vehicleTheft,
-            safetyScore: safetyResult.overall,
-            safetyGrade: safetyResult.grade,
-            crimeDataYear: crimeData.year,
-          },
-          create: {
-            fips,
-            name: cleanName,
-            population: crimeData.population,
-            violentCrimeRate: crimeData.rates.violentCrime,
-            propertyCrimeRate: crimeData.rates.propertyCrime,
-            murderRate: crimeData.rates.murder,
-            robberyRate: crimeData.rates.robbery,
-            assaultRate: crimeData.rates.assault,
-            burglaryRate: crimeData.rates.burglary,
-            larcenyRate: crimeData.rates.larceny,
-            vehicleTheftRate: crimeData.rates.vehicleTheft,
-            safetyScore: safetyResult.overall,
-            safetyGrade: safetyResult.grade,
-            crimeDataYear: crimeData.year,
-          },
-        });
-
-        return safetyResult;
-      }
-    } catch (e) {
-      console.error(`FBI API fetch failed for ${cleanName}:`, e);
-    }
-  } else {
-    console.warn(`No FIPS code for county: "${cleanName}" – add it to GEORGIA_COUNTIES`);
-  }
-
-  // 3. Ultimate fallback: national averages (scores = 50, vsNational = 0)
+  console.warn(`No crime data for county: "${cleanName}" – using national averages`);
   return getDefaultSafetyScore();
 }
 
@@ -298,11 +220,13 @@ router.post('/analyze', optionalAuth, async (req: AuthenticatedRequest, res: Res
     console.log('Fetching fresh data for coordinates:', { lat, lng, county: countyName });
     const startTime = Date.now();
 
-    // Run safety, transit, and Foursquare amenities in parallel.
+    // Get safety score from static data (sync)
+    const safetyScore = getSafetyScoreForLocation(countyName);
+
+    // Run Foursquare and transit in parallel.
     // Foursquare returns null when not configured or rate-limited; we fall
     // back to Overpass only in that case.
-    const [safetyScore, foursquarePOIs, transitStops] = await Promise.all([
-      getSafetyScoreForLocation(countyName),
+    const [foursquarePOIs, transitStops] = await Promise.all([
       fetchFoursquarePOIs(lat, lng, 8047),   // 5 miles
       fetchTransitStops(lat, lng, 1609),
     ]);
@@ -395,19 +319,21 @@ router.post('/analyze', optionalAuth, async (req: AuthenticatedRequest, res: Res
       await cachePulse(zipCode, lat, lng, pulse);
     }
 
-    // Log search if user is authenticated
+    // Log search if user is authenticated (optional - database may not be available)
     if (req.user) {
-      await prisma.searchHistory.create({
-        data: {
-          userId: req.user.userId,
-          query: `${lat}, ${lng}`,
-          address: geoResult.displayName,
-          city: location.city,
-          county: countyName,
-          zipCode,
-          lat,
-          lng,
-        },
+      await safeDbOperation(async (prisma) => {
+        return prisma.searchHistory.create({
+          data: {
+            userId: req.user!.userId,
+            query: `${lat}, ${lng}`,
+            address: geoResult.displayName,
+            city: location.city,
+            county: countyName,
+            zipCode,
+            lat,
+            lng,
+          },
+        });
       });
     }
 
@@ -472,11 +398,13 @@ router.post('/analyze-address', optionalAuth, async (req: AuthenticatedRequest, 
     console.log('Fetching fresh data for address:', address);
     const startTime = Date.now();
 
-    // Run safety, transit, and Foursquare amenities in parallel.
+    // Get safety score from static data (sync)
+    const safetyScore = getSafetyScoreForLocation(countyName);
+
+    // Run Foursquare and transit in parallel.
     // Foursquare returns null when not configured or rate-limited; we fall
     // back to Overpass only in that case.
-    const [safetyScore, foursquarePOIs, transitStops] = await Promise.all([
-      getSafetyScoreForLocation(countyName),
+    const [foursquarePOIs, transitStops] = await Promise.all([
       fetchFoursquarePOIs(lat, lng, 8047),   // 5 miles
       fetchTransitStops(lat, lng, 1609),
     ]);
@@ -569,19 +497,21 @@ router.post('/analyze-address', optionalAuth, async (req: AuthenticatedRequest, 
       await cachePulse(zipCode, lat, lng, pulse);
     }
 
-    // Log search if user is authenticated
+    // Log search if user is authenticated (optional - database may not be available)
     if (req.user) {
-      await prisma.searchHistory.create({
-        data: {
-          userId: req.user.userId,
-          query: address,
-          address: geoResult.displayName,
-          city: location.city,
-          county: countyName,
-          zipCode,
-          lat,
-          lng,
-        },
+      await safeDbOperation(async (prisma) => {
+        return prisma.searchHistory.create({
+          data: {
+            userId: req.user!.userId,
+            query: address,
+            address: geoResult.displayName,
+            city: location.city,
+            county: countyName,
+            zipCode,
+            lat,
+            lng,
+          },
+        });
       });
     }
 
@@ -645,38 +575,29 @@ router.get('/weight-presets', (_req: Request, res: Response) => {
 
 // -----------------------------------------------------------------------------
 // GET /api/pulse/georgia-coverage - Get coverage info
+// Uses static data - database not required
 // -----------------------------------------------------------------------------
 
-router.get('/georgia-coverage', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const [countyCount, cityCount, zipCount] = await Promise.all([
-      prisma.georgiaCounty.count(),
-      prisma.georgiaCity.count(),
-      prisma.georgiaZipCode.count(),
-    ]);
+router.get('/georgia-coverage', (_req: Request, res: Response) => {
+  // Get county count from static crime data
+  const counties = getAllGeorgiaCounties();
 
-    const countiesWithData = await prisma.georgiaCounty.count({
-      where: { safetyScore: { not: null } },
-    });
-
-    res.json({
-      success: true,
-      data: {
-        state: 'Georgia',
-        counties: countyCount,
-        countiesWithCrimeData: countiesWithData,
-        cities: cityCount,
-        zipCodes: zipCount,
-        dataSources: [
-          { name: 'FBI Crime Data Explorer', type: 'crime', coverage: 'county-level' },
-          { name: 'OpenStreetMap', type: 'amenities', coverage: 'real-time' },
-          { name: 'Nominatim', type: 'geocoding', coverage: 'real-time' },
-        ],
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
+  res.json({
+    success: true,
+    data: {
+      state: 'Georgia',
+      counties: counties.length,
+      countiesWithCrimeData: counties.length,
+      cities: 'N/A (real-time geocoding)',
+      zipCodes: 'N/A (real-time geocoding)',
+      dataSources: [
+        { name: 'FBI Crime Data Explorer', type: 'crime', coverage: 'county-level' },
+        { name: 'Foursquare Places API', type: 'amenities', coverage: 'real-time' },
+        { name: 'OpenStreetMap (fallback)', type: 'amenities', coverage: 'real-time' },
+        { name: 'Nominatim', type: 'geocoding', coverage: 'real-time' },
+      ],
+    },
+  });
 });
 
 // -----------------------------------------------------------------------------

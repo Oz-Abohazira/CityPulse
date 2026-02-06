@@ -4,17 +4,26 @@
 
 import { Router, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@prisma/client';
 import { ApiError } from '../middleware/errorHandler.js';
 import { optionalAuth, requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
 import { geocode } from '../services/nominatim.js';
 import { fetchAmenitiesInRadius } from '../services/osm-amenities.js';
 import { calculateMobilityScoresFromPOIs } from '../services/walkability.js';
 import { calculateVibeScore, compareVibeScores } from '../services/vibe.js';
+import { getCountyCrimeDataByName, calculateSafetyScore } from '../services/fbi-crime.js';
+import { safeDbOperation, getPrisma } from '../lib/prisma.js';
 import type { LocationPulse, SafetyScore, AmenitiesScore } from '../types.js';
 
 const router = Router();
-const prisma = new PrismaClient();
+
+// Helper to get Prisma or throw unavailable error
+function requireDatabase() {
+  const prisma = getPrisma();
+  if (!prisma) {
+    throw ApiError.serviceUnavailable('Saved comparisons feature is not available - database not configured');
+  }
+  return prisma;
+}
 
 // Georgia bounding box for validation
 const GEORGIA_BOUNDS = {
@@ -90,15 +99,7 @@ router.post('/', optionalAuth, async (req: AuthenticatedRequest, res: Response, 
       // Get county for safety data
       const cityName = geocodeResult.address.city || geocodeResult.address.town || '';
       const zipCode = geocodeResult.address.postcode || '';
-
-      const county = await prisma.georgiaCounty.findFirst({
-        where: {
-          OR: [
-            { cities: { some: { name: { contains: cityName } } } },
-            { zipCodes: { some: { zipCode: zipCode } } },
-          ],
-        },
-      });
+      const countyName = geocodeResult.address.county || '';
 
       // Fetch amenities from OSM
       const amenities = await fetchAmenitiesInRadius(lat, lng, 1500);
@@ -106,29 +107,21 @@ router.post('/', optionalAuth, async (req: AuthenticatedRequest, res: Response, 
       // Calculate mobility scores
       const mobilityScores = calculateMobilityScoresFromPOIs(amenities, []);
 
-      // Build safety score from county data
-      const safetyScore: SafetyScore = {
-        overall: county?.safetyScore || 50,
-        grade: (county?.safetyGrade as SafetyScore['grade']) || 'C',
-        riskLevel: county?.safetyScore && county.safetyScore >= 70 ? 'low' : county?.safetyScore && county.safetyScore >= 50 ? 'moderate' : 'high',
-        trend: 'stable',
-        vsNational: 0,
-        crimeRates: {
-          violent: county?.violentCrimeRate || 0,
-          property: county?.propertyCrimeRate || 0,
-          total: (county?.violentCrimeRate || 0) + (county?.propertyCrimeRate || 0),
-        },
-        breakdown: {
-          murder: 0,
-          robbery: 0,
-          assault: 0,
-          burglary: 0,
-          theft: 0,
-          vehicleTheft: 0,
-        },
-        dataSource: 'FBI Crime Data Explorer',
-        lastUpdated: new Date().toISOString(),
-      };
+      // Get safety score from static crime data
+      const crimeData = getCountyCrimeDataByName(countyName);
+      const safetyScore: SafetyScore = crimeData
+        ? calculateSafetyScore(crimeData.rates)
+        : {
+            overall: 50,
+            grade: 'C',
+            riskLevel: 'moderate',
+            trend: 'stable',
+            vsNational: 0,
+            crimeRates: { violent: 0, property: 0, total: 0 },
+            breakdown: { murder: 50, robbery: 50, assault: 50, burglary: 50, theft: 50, vehicleTheft: 50 },
+            dataSource: 'National averages (county data unavailable)',
+            lastUpdated: new Date().toISOString(),
+          };
 
       // Build amenities score
       const amenityCounts = {
@@ -187,7 +180,7 @@ router.post('/', optionalAuth, async (req: AuthenticatedRequest, res: Response, 
           city: cityName,
           state: 'Georgia',
           zipCode: zipCode,
-          county: county?.name || '',
+          county: countyName.replace(' County', ''),
           country: 'USA',
           coordinates: { lat, lng },
         },
@@ -196,9 +189,9 @@ router.post('/', optionalAuth, async (req: AuthenticatedRequest, res: Response, 
         mobilityScores,
         amenitiesScore,
         vibeScore,
-        dataQuality: county ? 'complete' : 'partial',
+        dataQuality: crimeData ? 'complete' : 'partial',
         dataSources: [
-          { name: 'FBI Crime Data Explorer', lastUpdated: new Date(), coverage: county ? 'full' : 'partial' },
+          { name: 'FBI Crime Data Explorer', lastUpdated: new Date(), coverage: crimeData ? 'full' : 'partial' },
           { name: 'OpenStreetMap', lastUpdated: new Date(), coverage: 'full' },
         ],
       };
@@ -237,6 +230,7 @@ router.post('/', optionalAuth, async (req: AuthenticatedRequest, res: Response, 
 
 router.post('/save', requireAuth, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const userId = req.user!.userId;
 
     const validation = saveComparisonSchema.safeParse(req.body);
@@ -286,6 +280,7 @@ router.post('/save', requireAuth, async (req: AuthenticatedRequest, res: Respons
 
 router.get('/saved', requireAuth, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const userId = req.user!.userId;
 
     const comparisons = await prisma.comparison.findMany({
@@ -313,6 +308,7 @@ router.get('/saved', requireAuth, async (req: AuthenticatedRequest, res: Respons
 
 router.delete('/saved/:id', requireAuth, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const userId = req.user!.userId;
     const id = req.params.id as string;
 

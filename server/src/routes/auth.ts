@@ -5,12 +5,20 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { PrismaClient } from '@prisma/client';
 import { ApiError } from '../middleware/errorHandler.js';
 import { generateToken, requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
+import { getPrisma } from '../lib/prisma.js';
 
 const router = Router();
-const prisma = new PrismaClient();
+
+// Helper to get Prisma or throw unavailable error
+function requireDatabase() {
+  const prisma = getPrisma();
+  if (!prisma) {
+    throw ApiError.serviceUnavailable('Authentication is not available - database not configured');
+  }
+  return prisma;
+}
 
 // -----------------------------------------------------------------------------
 // Validation Schemas
@@ -34,6 +42,7 @@ const loginSchema = z.object({
 
 router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const validation = registerSchema.safeParse(req.body);
 
     if (!validation.success) {
@@ -91,6 +100,7 @@ router.post('/register', async (req: Request, res: Response, next: NextFunction)
 
 router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const validation = loginSchema.safeParse(req.body);
 
     if (!validation.success) {
@@ -140,6 +150,7 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
 
 router.get('/me', requireAuth, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const userId = req.user!.userId;
 
     const user = await prisma.user.findUnique({

@@ -4,12 +4,20 @@
 
 import { Router, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@prisma/client';
 import { ApiError } from '../middleware/errorHandler.js';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/auth.js';
+import { getPrisma } from '../lib/prisma.js';
 
 const router = Router();
-const prisma = new PrismaClient();
+
+// Helper to get Prisma or throw unavailable error
+function requireDatabase() {
+  const prisma = getPrisma();
+  if (!prisma) {
+    throw ApiError.serviceUnavailable('Saved locations feature is not available - database not configured');
+  }
+  return prisma;
+}
 
 // All routes require authentication
 router.use(requireAuth);
@@ -42,6 +50,7 @@ const updateLocationSchema = z.object({
 
 router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const userId = req.user!.userId;
 
     const savedLocations = await prisma.savedLocation.findMany({
@@ -70,6 +79,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response, next: NextFunct
 
 router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const userId = req.user!.userId;
 
     const validation = saveLocationSchema.safeParse(req.body);
@@ -131,6 +141,7 @@ router.post('/', async (req: AuthenticatedRequest, res: Response, next: NextFunc
 
 router.get('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const userId = req.user!.userId;
     const id = req.params.id as string;
 
@@ -166,6 +177,7 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFu
 
 router.patch('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const userId = req.user!.userId;
     const id = req.params.id as string;
 
@@ -209,6 +221,7 @@ router.patch('/:id', async (req: AuthenticatedRequest, res: Response, next: Next
 
 router.delete('/:id', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
+    const prisma = requireDatabase();
     const userId = req.user!.userId;
     const id = req.params.id as string;
 
